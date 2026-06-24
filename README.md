@@ -24,9 +24,11 @@ checked against real output once run on a machine with virtualization enabled.
 |---|---|
 | `scheduler.py` | The custom scheduler (provided, unmodified) |
 | `pod1.yaml`, `pod2.yaml`, `pod3.yaml` | The three pods to schedule (provided, unmodified) |
-| `Dockerfile` | Packages `scheduler.py` into an image runnable inside the cluster |
-| `scheduler-rbac.yaml` | ServiceAccount + ClusterRole + ClusterRoleBinding the scheduler needs to list nodes/pods and create bindings |
-| `scheduler-deployment.yaml` | Runs the scheduler as a single-replica Deployment with `NODE_MEM_LIMIT_MB=2048` |
+| `Dockerfile` | Packages `scheduler.py` into an image runnable inside the cluster, as a non-root user |
+| `scheduler-rbac.yaml` | ServiceAccount, plus a least-privilege ClusterRole (`nodes`, list-only) and namespaced Role (`pods`/`pods/binding` in `default`) |
+| `scheduler-deployment.yaml` | Runs the scheduler as a single-replica Deployment with `NODE_MEM_LIMIT_MB=2048`, resource limits, and a locked-down securityContext |
+| `Makefile` | `make cluster / build / load / deploy / pods / logs / test / clean` — one command per step below |
+| `requirements-dev.txt`, `tests/test_scheduler.py` | Dev/test dependencies and the pytest suite (see Tests below) |
 
 ## 1. Cluster setup (2 nodes, ≥2GB each)
 
@@ -34,6 +36,8 @@ checked against real output once run on a machine with virtualization enabled.
 minikube start --nodes 2 --cpus 2 --memory 2300 --driver=docker
 kubectl get nodes -o wide
 ```
+
+(or `make cluster`)
 
 `--memory 2300` gives each minikube node node ~2.3GB of VM memory, comfortably over the
 2GB floor the task asks for, leaving headroom above the 2048MB the scheduler is told to
@@ -50,8 +54,8 @@ docker build -t custom-scheduler:latest .
 minikube image load custom-scheduler:latest
 ```
 
-(`minikube image load` works the same way regardless of driver/OS — no need to fight with
-`minikube docker-env`.)
+(or `make load`. `minikube image load` works the same way regardless of driver/OS — no
+need to fight with `minikube docker-env`.)
 
 ## 3. Deploy the scheduler
 
@@ -62,9 +66,25 @@ kubectl get pods -l app=custom-scheduler -o wide   # wait for Running
 kubectl logs -l app=custom-scheduler -f             # leave this tailing in a second terminal
 ```
 
+(or `make deploy`, then `make logs`)
+
 The scheduler Deployment itself intentionally does **not** set `schedulerName:
 custom-scheduler` — it has to start via the default scheduler, otherwise nothing would ever
 bind it.
+
+`scheduler-rbac.yaml` is split into two bindings rather than one blanket ClusterRole:
+`nodes` is cluster-scoped so listing it unavoidably needs a ClusterRole/ClusterRoleBinding,
+but `pods` and `pods/binding` are only ever touched in the `default` namespace
+(`scheduler.py` hardcodes `"default"` throughout), so those get a namespaced Role/RoleBinding
+instead — the scheduler can't list or bind pods in any other namespace even if it tried.
+Verbs are also trimmed to exactly what the code calls: `list` on nodes (no `get`/`watch` —
+`available_nodes()` only ever lists), `list`+`watch` on pods, `create` on `pods/binding`.
+
+`scheduler-deployment.yaml` also runs the container as a non-root UID (matching the
+`useradd`/`USER` in the Dockerfile), with `allowPrivilegeEscalation: false`, all Linux
+capabilities dropped, a read-only root filesystem (safe here — `scheduler.py` only writes to
+stdout, never to disk), and explicit CPU/memory requests+limits — notably absent from a
+scheduler whose entire job is reasoning about other pods' memory.
 
 ## 4. Schedule pod1, pod2, pod3 in order
 
@@ -75,6 +95,8 @@ kubectl apply -f pod3.yaml
 
 kubectl get pods -o wide
 ```
+
+(or `make pods`)
 
 Each `pod*.yaml` sets `schedulerName: custom-scheduler`, so the default scheduler ignores
 them; they sit `Pending` until `scheduler.py`'s watch loop picks them up and binds them.
@@ -153,6 +175,8 @@ python -m venv .venv
 .venv/Scripts/pip install -r requirements-dev.txt   # .venv/bin/pip on macOS/Linux
 .venv/Scripts/python -m pytest tests/ -v
 ```
+
+(or `make test` on macOS/Linux)
 
 All 11 tests pass against the unmodified `scheduler.py`.
 

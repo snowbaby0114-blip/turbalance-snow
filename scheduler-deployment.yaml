@@ -14,6 +14,11 @@ spec:
         app: custom-scheduler
     spec:
       serviceAccountName: custom-scheduler
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: custom-scheduler
           image: custom-scheduler:latest
@@ -21,3 +26,15 @@ spec:
           env:
             - name: NODE_MEM_LIMIT_MB
               value: "2048"
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
