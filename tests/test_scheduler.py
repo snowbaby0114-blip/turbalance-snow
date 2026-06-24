@@ -129,3 +129,24 @@ class TestLoadBalancingAssignment:
         final_load = scheduler.get_nodes_requested_memory()
         assert final_load["minikube"] == 1200 * 1024**2
         assert final_load["minikube-m02"] == 800 * 1024**2
+
+    def test_logs_assignment_decisions(self, monkeypatch, caplog):
+        """The task says to verify the scheduler is used by checking its logs.
+        This asserts scheduler.py's own logger actually emits the
+        'Assigning pod ... / Optimal node for pod ...' lines a reviewer would
+        grep for in `kubectl logs`."""
+        caplog.set_level("INFO", logger="custom-scheduler")
+        node_a, node_b = make_node("minikube"), make_node("minikube-m02")
+        bound_pods = []
+        monkeypatch.setattr(
+            scheduler.v1,
+            "list_namespaced_pod",
+            lambda ns: MagicMock(items=bound_pods),
+        )
+
+        pod1 = make_pod("pod1", None, memory_request="600Mi")
+        scheduler.load_balancing_assignment(pod1, [node_a, node_b])
+
+        messages = [r.message for r in caplog.records]
+        assert any("Assigning pod pod1 with memory request" in m for m in messages)
+        assert any("Optimal node for pod pod1: minikube" in m for m in messages)

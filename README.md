@@ -167,8 +167,25 @@ node — holds regardless of which physical node ends up labeled first.)
 `tests/test_scheduler.py` exercises `scheduler.py`'s actual functions directly (mocking only
 the Kubernetes API client calls, not the scheduler's logic) — this is real, executed
 verification, run without a cluster, of the same placement reasoning traced by hand above.
-Notably, `test_pod1_pod2_pod3_placement_matches_readme_trace` replays the exact pod1/pod2/
-pod3 scenario and asserts it lands exactly as the "Expected placement" table predicts.
+It maps directly onto the task's own verification steps:
+
+- **Step 2 ("schedule pod1, pod2, pod3 in the same order")** →
+  `test_pod1_pod2_pod3_placement_matches_readme_trace` replays the exact scenario and asserts
+  it lands exactly as the "Expected placement" table above predicts.
+- **Step 2's note ("verify the scheduler is used by checking the logs")** →
+  `test_logs_assignment_decisions` asserts `scheduler.py`'s own logger actually emits the
+  `Assigning pod ... / Optimal node for pod ...` lines a reviewer would `kubectl logs` for.
+  Running that scenario for all three pods produces this real, test-generated log transcript
+  (not a live-cluster capture — this machine can't run minikube, see "Status" above):
+
+  ```
+  2026-06-24 18:25:55,525 INFO Assigning pod pod1 with memory request 629145600.0:
+  2026-06-24 18:25:55,525 INFO Optimal node for pod pod1: minikube
+  2026-06-24 18:25:55,525 INFO Assigning pod pod2 with memory request 838860800.0:
+  2026-06-24 18:25:55,526 INFO Optimal node for pod pod2: minikube-m02
+  2026-06-24 18:25:55,526 INFO Assigning pod pod3 with memory request 629145600.0:
+  2026-06-24 18:25:55,526 INFO Optimal node for pod pod3: minikube
+  ```
 
 ```bash
 python -m venv .venv
@@ -178,7 +195,7 @@ python -m venv .venv
 
 (or `make test` on macOS/Linux)
 
-All 11 tests pass against the unmodified `scheduler.py`.
+All 12 tests pass against the unmodified `scheduler.py`.
 
 ## Architecture notes: what changes for production
 
