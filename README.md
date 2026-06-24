@@ -140,6 +140,22 @@ differ from this if the Kubernetes API happens to return nodes in a different or
 creation order; the *relative* reasoning — always fill the currently-emptiest eligible
 node — holds regardless of which physical node ends up labeled first.)
 
+## Tests
+
+`tests/test_scheduler.py` exercises `scheduler.py`'s actual functions directly (mocking only
+the Kubernetes API client calls, not the scheduler's logic) — this is real, executed
+verification, run without a cluster, of the same placement reasoning traced by hand above.
+Notably, `test_pod1_pod2_pod3_placement_matches_readme_trace` replays the exact pod1/pod2/
+pod3 scenario and asserts it lands exactly as the "Expected placement" table predicts.
+
+```bash
+python -m venv .venv
+.venv/Scripts/pip install -r requirements-dev.txt   # .venv/bin/pip on macOS/Linux
+.venv/Scripts/python -m pytest tests/ -v
+```
+
+All 11 tests pass against the unmodified `scheduler.py`.
+
 ## Architecture notes: what changes for production
 
 `scheduler.py` is correct for the demo (single instance, one slow watch loop, low pod

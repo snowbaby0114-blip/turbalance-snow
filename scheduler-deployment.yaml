@@ -13,13 +13,11 @@ spec:
       labels:
         app: custom-scheduler
     spec:
-      # Deliberately left on the default scheduler so this pod can actually
-      # start; it must not be scheduled by itself.
       serviceAccountName: custom-scheduler
       containers:
         - name: custom-scheduler
           image: custom-scheduler:latest
-          imagePullPolicy: Never # image is loaded directly into minikube, not pulled from a registry
+          imagePullPolicy: Never
           env:
             - name: NODE_MEM_LIMIT_MB
               value: "2048"
