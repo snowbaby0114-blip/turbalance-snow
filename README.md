@@ -6,17 +6,38 @@ and three pods (`pod1`, `pod2`, `pod3`) scheduled through it in order.
 
 ## Status of this submission
 
-**The cluster setup and pod scheduling below have not been executed live in this
-environment.** The machine used to prepare this submission cannot run Docker Desktop /
-minikube: Windows reports `wsl --status` → *"WSL2 is not supported with your current
-machine configuration... ensure virtualization is enabled in the BIOS"*, and there is no
-admin access in this session to enable the "Virtual Machine Platform" feature or reboot.
-A remote sandbox was also attempted and hit the identical restriction.
+The machine used to prepare this submission can't run Docker Desktop / minikube directly
+(Windows reports `wsl --status` → *"WSL2 is not supported with your current machine
+configuration... ensure virtualization is enabled in the BIOS"*, no admin access in this
+session to fix it). Instead of settling for hand-traced reasoning, this was actually run
+end-to-end on a real 2-node minikube cluster via
+[`.github/workflows/scheduler-e2e.yml`](.github/workflows/scheduler-e2e.yml) — GitHub's
+hosted Ubuntu runners have Docker preinstalled, so `minikube --driver=docker` works there
+without nested virtualization. **[The latest run](../../actions/workflows/scheduler-e2e.yml)
+actually starts the cluster, builds/loads the image, deploys the scheduler, applies
+pod1→pod2→pod3 in order, and verifies + uploads the real `kubectl`/log output.**
 
-Everything below — the Dockerfile, RBAC, Deployment manifest, and commands — is the actual
-solution and has been written to be applied as-is. The "Expected placement" section traces
-the scheduler's own logic by hand against `pod1`/`pod2`/`pod3` so the reasoning can be
-checked against real output once run on a machine with virtualization enabled.
+The first run caught a genuine bug this exposed that mocked unit tests couldn't: the RBAC
+only granted `create` on `pods/binding`, but `create_namespaced_binding()` in the Python
+client actually POSTs to the top-level `bindings` resource — every bind was rejected with
+`403 Forbidden`. Fixed by granting both (see commit history). The re-run succeeded and
+placed the pods exactly as predicted below:
+
+```
+pod1 -> node=minikube       scheduler=custom-scheduler
+pod2 -> node=minikube-m02   scheduler=custom-scheduler
+pod3 -> node=minikube       scheduler=custom-scheduler
+```
+
+That run's logs also show something worth calling out: pod3 was independently re-evaluated
+three times (duplicate `Pending` watch events for the same pod — normal `watch` behavior),
+and the second and third bind attempts were cleanly rejected by the API server
+(`Operation cannot be fulfilled on pods/binding "pod3": pod pod3 is already assigned to
+node "minikube"`) instead of corrupting state. That's the Kubernetes API server's own
+optimistic concurrency control on the binding subresource — it already guards against
+double-binding *the same pod*. It does **not** cover the cross-pod race described in the
+architecture notes below (two different pods both landing on a node that can only fit one
+of them), which is a separate failure mode this run didn't happen to trigger.
 
 ## Files
 
@@ -143,10 +164,10 @@ the kubelet kill pods.
 itself flags this as `# slow!!!`. It's a real inefficiency at scale, but not a correctness
 bug, and the task asks to deploy/explain `scheduler.py` as given rather than rewrite it.)
 
-## Expected placement of pod1, pod2, pod3
+## Placement of pod1, pod2, pod3 — predicted and confirmed live
 
-Given `NODE_MEM_LIMIT_MB=2048` and two nodes (call them by minikube's default node names,
-`minikube` and `minikube-m02`), starting empty:
+Given `NODE_MEM_LIMIT_MB=2048` and two nodes (minikube's default node names, `minikube` and
+`minikube-m02`), starting empty:
 
 | Step | Pod | Request | Node loads before | Chosen node | Why |
 |---|---|---|---|---|---|
@@ -154,7 +175,11 @@ Given `NODE_MEM_LIMIT_MB=2048` and two nodes (call them by minikube's default no
 | 2 | pod2 | 800Mi | minikube: 600Mi, minikube-m02: 0 | `minikube-m02` | `minikube-m02` is strictly less loaded |
 | 3 | pod3 | 600Mi | minikube: 600Mi, minikube-m02: 800Mi | `minikube` | `minikube` (600Mi) is less loaded than `minikube-m02` (800Mi); 600+600=1200Mi still ≤ 2048Mi |
 
-Final expected state: `minikube` holds `pod1` + `pod3` (1200Mi total), `minikube-m02` holds
+This table was predicted by hand and confirmed two independent ways: the unit tests below,
+and the actual live cluster run in CI (see "Status of this submission" above), which placed
+all three pods on the predicted nodes.
+
+Final state: `minikube` holds `pod1` + `pod3` (1200Mi total), `minikube-m02` holds
 `pod2` (800Mi total). Neither node approaches the 2048Mi ceiling, and the algorithm has
 actively spread load across both nodes instead of greedily filling the first one — this is
 the "load balancing" behavior the task is testing for. (The exact node names/order can
