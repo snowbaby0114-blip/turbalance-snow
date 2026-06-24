@@ -1,0 +1,25 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: custom-scheduler
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: custom-scheduler
+  template:
+    metadata:
+      labels:
+        app: custom-scheduler
+    spec:
+      # Deliberately left on the default scheduler so this pod can actually
+      # start; it must not be scheduled by itself.
+      serviceAccountName: custom-scheduler
+      containers:
+        - name: custom-scheduler
+          image: custom-scheduler:latest
+          imagePullPolicy: Never # image is loaded directly into minikube, not pulled from a registry
+          env:
+            - name: NODE_MEM_LIMIT_MB
+              value: "2048"
